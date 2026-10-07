@@ -125,8 +125,8 @@ def table(rows, cols, w, h, bf, trs, out_margin=(0, 0, 0, 0)):
             f'<hp:outMargin left="{l}" right="{r}" top="{t}" bottom="{b}"/><hp:inMargin left="0" right="0" top="0" bottom="0"/>'
             + ''.join(f'<hp:tr>{tr}</hp:tr>' for tr in trs) + '</hp:tbl>')
 
-def wrap_obj(obj, cp='24'):
-    return f'<hp:p id="0" paraPrIDRef="3" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="{cp}">{obj}<hp:t/></hp:run></hp:p>'
+def wrap_obj(obj, cp='24', page_break=False):
+    return f'<hp:p id="0" paraPrIDRef="3" styleIDRef="0" pageBreak="{1 if page_break else 0}" columnBreak="0" merged="0"><hp:run charPrIDRef="{cp}">{obj}<hp:t/></hp:run></hp:p>'
 
 BOX_W = 60621
 def content_paras(items, base, inner_w):
@@ -147,12 +147,12 @@ def content_paras(items, base, inner_w):
             out.append(para(it, base))
     return ''.join(out)
 
-def concept_box(title, items):
+def concept_box(title, items, page_break=False):
     inner = BOX_W - 1417 * 2
     paras = (f'<hp:p id="0" paraPrIDRef="3" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
              f'<hp:run charPrIDRef="28"><hp:t>■ {esc(title)}</hp:t></hp:run></hp:p>' + content_paras(items, '33', inner))
     tr = cell(0, 0, 1, 1, BOX_W, 6000, '7', paras, (1417, 1417, 1417, 1417))
-    return wrap_obj(table(1, 1, BOX_W, 8000, '6', [tr], (141, 0, 566, 566)), '31')
+    return wrap_obj(table(1, 1, BOX_W, 8000, '6', [tr], (141, 0, 566, 566)), '31', page_break)
 
 def ihae_box(label, items):
     inner = 59699 - 1417 * 2
@@ -186,6 +186,7 @@ p0 = p0.replace('1-2 [ 개념 총 정리 ] 1. 집합', esc(HEADER_TEXT))
 
 body = []
 first_title_done = False
+prev = None
 for blk in BLOCKS:
     kind = blk[0]
     if kind == 'title':
@@ -195,7 +196,8 @@ for blk in BLOCKS:
         else:
             body.append(unit_title(blk[1], colbreak=blk[2] if len(blk) > 2 else False))
     elif kind == 'box':
-        body.append(concept_box(blk[1], blk[2]))
+        # 이해 박스가 끝나면 다음 ■ 개념 박스는 새 쪽에서 시작
+        body.append(concept_box(blk[1], blk[2], page_break=(prev == 'ihae')))
     elif kind == 'ihae':
         body.append(ihae_box(blk[1], blk[2]))
     elif kind == 'note':
@@ -204,6 +206,7 @@ for blk in BLOCKS:
         body.append(blank())
     elif kind == 'colbreak':
         body.append('<hp:p id="0" paraPrIDRef="3" styleIDRef="0" pageBreak="0" columnBreak="1" merged="0"><hp:run charPrIDRef="24"><hp:t/></hp:run></hp:p>')
+    prev = kind
 
 section = sec_open + p0 + ''.join(body) + '</hs:sec>'
 
