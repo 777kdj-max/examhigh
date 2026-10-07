@@ -1,6 +1,8 @@
 # 기본틀(개념 총 정리) 블록으로 원본(기하 개념정리) 1~3쪽을 재구성
 import re, json, html, os, shutil, sys
-from content import HEADER_TEXT, BLOCKS
+import importlib
+_c = importlib.import_module(os.environ.get('CONTENT', 'content'))
+HEADER_TEXT, BLOCKS = _c.HEADER_TEXT, _c.BLOCKS
 
 SP = os.path.dirname(os.path.abspath(__file__))
 REF = os.path.join(SP, 'ref')
@@ -96,14 +98,30 @@ for m in re.finditer(r'<hp:pic .*?</hp:pic>', SRC_SEC, re.S):
     iid = re.search(r'binaryItemIDRef="(\w+)"', m.group(0)).group(1)
     PICS.setdefault(iid, m.group(0))
 IMG_MAP = {}  # 원본 id -> 새 id
-def pic(src_id):
+def pic(src_id, maxw=None):
     new = 'image%d' % (100 + int(src_id[5:]))
     IMG_MAP[src_id] = new
     x = PICS[src_id]
     x = x.replace(f'binaryItemIDRef="{src_id}"', f'binaryItemIDRef="{new}"')
     x = re.sub(r'<hp:pic id="\d+"', f'<hp:pic id="{nid()}"', x, count=1)
     x = re.sub(r' xmlns:\w+="[^"]*"', '', x)
-    return x, int(re.search(r'<hp:sz width="(\d+)"', x).group(1))
+    # 본문 흐름을 따라가도록 글자처럼 취급
+    x = re.sub(r'<hp:pos [^>]*/>', '<hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" '
+               'holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" '
+               'vertOffset="0" horzOffset="0"/>', x, count=1)
+    x = x.replace('textWrap="SQUARE"', 'textWrap="TOP_AND_BOTTOM"', 1)
+    w, h = map(int, re.search(r'<hp:sz width="(\d+)"[^>]*height="(\d+)"', x).groups())
+    if maxw and w > maxw:
+        f = maxw / w
+        nw, nh = int(w * f), int(h * f)
+        x = re.sub(r'<hp:sz width="\d+"([^>]*)height="\d+"', f'<hp:sz width="{nw}"\\1height="{nh}"', x, count=1)
+        x = re.sub(r'<hp:curSz width="\d+" height="\d+"/>', f'<hp:curSz width="{nw}" height="{nh}"/>', x, count=1)
+        x = re.sub(r'centerX="\d+" centerY="\d+"', f'centerX="{nw // 2}" centerY="{nh // 2}"', x, count=1)
+        def sca(m):
+            return f'<hc:scaMatrix e1="{float(m.group(1)) * f:.6f}" e2="0" e3="0" e4="0" e5="{float(m.group(2)) * f:.6f}" e6="0"/>'
+        x = re.sub(r'<hc:scaMatrix e1="([\d.]+)" e2="0" e3="0" e4="0" e5="([\d.]+)" e6="0"/>', sca, x, count=1)
+        w = nw
+    return x, w
 
 # ---------- 표 공통 ----------
 def cell(col, row, cs, rs, w, h, bf, paras, margin=(0, 0, 0, 0), valign='CENTER'):
@@ -133,9 +151,24 @@ def content_paras(items, base, inner_w):
     """items: 문자열(문단) 또는 ('fig', 이미지id, [문단...]) — 그림|설명 2칸 무테 표"""
     out = []
     for it in items:
+        if isinstance(it, tuple) and it[0] == 'img':
+            px, _ = pic(it[1], inner_w)
+            out.append(f'<hp:p id="0" paraPrIDRef="27" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="{base}">{px}<hp:t/></hp:run></hp:p>')
+            continue
+        if isinstance(it, tuple) and it[0] == 'imgs':
+            n = len(it[1])
+            cw = inner_w // n
+            tcs = ''
+            for k, (iid, texts) in enumerate(it[1]):
+                px, _ = pic(iid, cw - 567)
+                ps = f'<hp:p id="0" paraPrIDRef="27" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="{base}">{px}<hp:t/></hp:run></hp:p>'
+                ps += ''.join(para(t, base) for t in texts)
+                tcs += cell(k, 0, 1, 1, cw, 1000, '19', ps, (283, 283, 283, 283), 'TOP')
+            out.append(wrap_obj(table(1, n, cw * n, 2000, '19', [tcs]), base))
+            continue
         if isinstance(it, tuple) and it[0] == 'fig':
             _, iid, texts = it
-            px, pw = pic(iid)
+            px, pw = pic(iid, int(inner_w * 0.42))
             lw = pw + 1134
             rw = inner_w - lw
             left = f'<hp:p id="0" paraPrIDRef="3" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="{base}">{px}<hp:t/></hp:run></hp:p>'
@@ -162,9 +195,13 @@ def ihae_box(label, items):
     r1 = cell(1, 1, 2, 1, 59699, 2442, '9', content_paras(items, '40', inner), (1417, 1417, 1417, 1417))
     return wrap_obj(table(2, 3, BOX_W, 8000, '6', [r0, r1], (0, 0, 566, 0)))
 
-def unit_title(text, colbreak=False):
-    return (f'<hp:p id="0" paraPrIDRef="3" styleIDRef="0" pageBreak="0" columnBreak="{1 if colbreak else 0}" merged="0">'
-            f'<hp:run charPrIDRef="32"><hp:t>{esc(text)}</hp:t></hp:run></hp:p>')
+def unit_title(text, newpage=False, header=None):
+    ctrl = ''
+    if header:
+        hc = re.sub(r'<hp:header id="\d+"', '<hp:header id="7"', HEADER_CTRL.replace(HEADER_TEXT_ESC, esc(header)), count=1)
+        ctrl = f'<hp:run charPrIDRef="24">{hc}</hp:run>'
+    return (f'<hp:p id="0" paraPrIDRef="3" styleIDRef="0" pageBreak="{1 if newpage else 0}" columnBreak="0" merged="0">'
+            f'{ctrl}<hp:run charPrIDRef="32"><hp:t>{esc(text)}</hp:t></hp:run></hp:p>')
 
 def note(items):
     # 상자 밖 참고 ▶ + 목록
@@ -183,6 +220,8 @@ sec_open = ref_sec[:head_end]
 p0 = re.search(r'<hp:p [^>]*>.*?</hp:p>(?=<hp:p )', ref_sec, re.S).group(0)
 p0 = re.sub(r'<hp:linesegarray>.*?</hp:linesegarray>', '', p0, flags=re.S)
 p0 = p0.replace('1-2 [ 개념 총 정리 ] 1. 집합', esc(HEADER_TEXT))
+HEADER_TEXT_ESC = esc(HEADER_TEXT)
+HEADER_CTRL = re.search(r'<hp:ctrl><hp:header .*?</hp:header></hp:ctrl>', p0, re.S).group(0)
 
 body = []
 first_title_done = False
@@ -194,7 +233,8 @@ for blk in BLOCKS:
             p0 = p0.replace('<hp:t>1. 집합과 원소</hp:t>', f'<hp:t>{esc(blk[1])}</hp:t>')
             first_title_done = True
         else:
-            body.append(unit_title(blk[1], colbreak=blk[2] if len(blk) > 2 else False))
+            opt = blk[2] if len(blk) > 2 else {}
+            body.append(unit_title(blk[1], opt.get('newpage', False), opt.get('header')))
     elif kind == 'box':
         # 이해 박스가 끝나면 다음 ■ 개념 박스는 새 쪽에서 시작
         body.append(concept_box(blk[1], blk[2], page_break=(prev == 'ihae')))
