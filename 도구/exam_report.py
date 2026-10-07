@@ -26,6 +26,10 @@ WIN = os.path.join(os.environ.get('WINDIR', 'C:/Windows'), 'Fonts')
 pdfmetrics.registerFont(TTFont('KR', _font([os.path.join(WIN, 'malgun.ttf'), os.path.join(SP, 'fonts', 'NanumGothic.ttf')])))
 pdfmetrics.registerFont(TTFont('KRB', _font([os.path.join(WIN, 'malgunbd.ttf'), os.path.join(SP, 'fonts', 'NanumGothicBold.ttf')])))
 pdfmetrics.registerFontFamily('KR', normal='KR', bold='KRB', italic='KR', boldItalic='KRB')
+# √ 같은 기호는 한글 글꼴에서 작게 나와 수학 기호가 또렷한 글꼴로 따로 그린다
+pdfmetrics.registerFont(TTFont('SYM', _font([os.path.join(WIN, 'segoeui.ttf'), '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                                             os.path.join(SP, 'fonts', 'NanumGothic.ttf')])))
+SUP = str.maketrans('⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ⁺⁻', '0123456789n+-')
 
 NAVY = colors.HexColor('#3E4C6E')
 LINE = colors.HexColor('#D5DAE3')
@@ -39,16 +43,19 @@ GRADE_BG = ['#2E7D4F', '#24578F', '#B7791F', '#C2611F']
 
 
 # ---------- 계산 ----------
+def is_sub(no):  # 주관식(단1, 서1 …)
+    return not no.isdigit()
+
 def label(no, suffix='번'):
-    return no if no.startswith('단') else no + suffix
+    return no if is_sub(no) else no + suffix
 
 def numfmt(x):
     return ('%.1f' % x).rstrip('0').rstrip('.') if x != int(x) else str(int(x))
 
 def compress(nos):
     """['1','2','3','5','단1'] → '1~3, 5번, 단1'"""
-    mc = [int(n) for n in nos if not n.startswith('단')]
-    sa = [n for n in nos if n.startswith('단')]
+    mc = [int(n) for n in nos if not is_sub(n)]
+    sa = [n for n in nos if is_sub(n)]
     parts, i = [], 0
     while i < len(mc):
         j = i
@@ -67,8 +74,8 @@ def analyze(d):
     items = d['items']
     by = {it['no']: it for it in items}
     total = sum(it['pts'] for it in items)
-    mc = [it for it in items if not it['no'].startswith('단')]
-    sa = [it for it in items if it['no'].startswith('단')]
+    mc = [it for it in items if not is_sub(it['no'])]
+    sa = [it for it in items if is_sub(it['no'])]
     def group(key, names):
         rows = []
         for k in names:
@@ -109,7 +116,9 @@ class S:
 
 def md(t):
     t = t.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    return re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', t)
+    t = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', t)
+    t = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ⁺⁻]+', lambda m: '<super>' + m.group(0).translate(SUP) + '</super>', t)
+    return t.replace('√', "<font name='SYM'>√</font>")
 
 
 class SecHead(Flowable):
@@ -189,7 +198,8 @@ def story(d, a, s, W):
 
     # 기본 정보
     mcp = sum(i['pts'] for i in a['mc']); sap = sum(i['pts'] for i in a['sa'])
-    comp = f"선택형 {len(a['mc'])}({numfmt(mcp)}점) + 단답형 {len(a['sa'])}({numfmt(sap)}점)"
+    sub = h.get('sub_name', '단답형')
+    comp = f"선택형 {len(a['mc'])}({numfmt(mcp)}점) + {sub} {len(a['sa'])}({numfmt(sap)}점)"
     L, V = s.lab, s.body
     big = ParagraphStyle('bg', parent=V, fontName='KRB', textColor=NAVY, fontSize=9.6 * k)
     info = Table([[Paragraph('학교', L), Paragraph(md(h['school']), ParagraphStyle('x', parent=V, fontName='KRB', fontSize=9.6 * k)),
@@ -207,8 +217,8 @@ def story(d, a, s, W):
     # 1. 출제 개요
     out.append(SecHead(1, '출제 개요 요약', s, W))
     sap_list = '·'.join(numfmt(i['pts']) for i in a['sa'])
-    stats = [(f"{len(d['items'])}문항", '총 출제 문항', f"선택형 {len(a['mc'])} · 단답형 {len(a['sa'])}"),
-             (f'{numfmt(sap)}점', '단답형 배점', f'{sap_list}점 · 답만 기재'),
+    stats = [(f"{len(d['items'])}문항", '총 출제 문항', f"선택형 {len(a['mc'])} · {sub} {len(a['sa'])}"),
+             (f'{numfmt(sap)}점', f'{sub} 배점', f"{sap_list}점 · {h.get('sub_note', '답만 기재')}"),
              (f"{len(d['killers'])}문항", '킬러·변별 문항', f"합계 {numfmt(a['killer_pts'])}점 · 1·2등급 변별 구간")]
     cw = (W - 6 * mm) / 3
     cells = []
